@@ -4,7 +4,25 @@ import numpy as np
 import keras
 import random
 import gym
+import pickle
+import time
 
+
+EPSILON = 0.00001
+
+def collectData(model, env, episodeNum=100):
+    expertTraj = {}
+    expertTraj['name'] = str(episodeNum) + " trajectories"
+    expertTraj["states"] = []
+    expertTraj["actions"] = []
+    expertTraj["rewards"] = []
+    while episodeNum >= 1:
+        episodeNum -= 1
+        states, actions, rewards = Imitation.generate_episode(model, env)
+        expertTraj["states"].extend(states)
+        expertTraj["actions"].extend(actions)
+        expertTraj["rewards"].extend(rewards)
+    return expertTraj
 
 class Imitation():
     def __init__(self, model_config_path, expert_weights_path):
@@ -12,11 +30,14 @@ class Imitation():
         with open(model_config_path, 'r') as f:
             self.expert = keras.models.model_from_json(f.read())
         self.expert.load_weights(expert_weights_path)
+        self.expert.compile("sgd", "categorical_crossentropy")
         
         # Initialize the cloned model (to be trained).
         with open(model_config_path, 'r') as f:
             self.model = keras.models.model_from_json(f.read())
 
+        opt = keras.optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
+        self.model.compile(optimizer= opt, loss="categorical_crossentropy", metrics=['accuracy'])
         # TODO: Define any training operations and optimizers here, initialize
         #       your variables, or alternatively compile your model here.
 
@@ -39,6 +60,24 @@ class Imitation():
         states = []
         actions = []
         rewards = []
+        state = env.reset()
+        state = state.reshape(1, state.size)
+        while True:
+            action = model.predict(state)
+            act = np.argmax(action[0])
+            action = np.zeros(action.shape) + EPSILON
+            action[:, act] += 1
+            state, reward, isTerminal, debugInfo = env.step(act)
+            if render:
+                env.render()
+                # print reward
+            if isTerminal:
+                break
+            state = state.reshape(1, state.size)
+            states.append(state)
+            actions.append(action)
+            rewards.append(reward)
+            
         return states, actions, rewards
     
     def train(self, env, num_episodes=100, num_epochs=50, render=False):
@@ -53,6 +92,18 @@ class Imitation():
         #       method run_expert() to generate training data.
         loss = 0
         acc = 0
+        sample = collectData(self.expert, env, num_episodes)
+        X = np.array(sample["states"])
+        X = X.reshape(-1, sample["states"][0][0].size)
+        y = np.array(sample["actions"])
+        y = y.reshape((-1, sample["actions"][0][0].size))
+        # do batch
+        print "do batch"
+        batch = 16
+        indices = np.arange(X.shape[0])
+        self.model.fit(x=X, y=y, batch_size=batch, epochs=num_epochs)
+        loss, acc = self.model.evaluate(x=X, y=y, batch_size=128)
+    
         return loss, acc
 
 
@@ -78,6 +129,11 @@ def parse_arguments():
 
     return parser.parse_args()
 
+def crossEntropy(truth, obs):
+    truth2 = np.zeros(truth[0].shape)
+    truth2[np.argmax(truth[0])] += 1
+    return -np.sum(truth2 * np.log(obs)), keras.losses.categorical_crossentropy(truth2,obs), truth2
+
 
 def main(args):
     # Parse command-line arguments.
@@ -85,13 +141,58 @@ def main(args):
     model_config_path = args.model_config_path
     expert_weights_path = args.expert_weights_path
     render = args.render
-    
+    imit = Imitation(model_config_path, expert_weights_path)
     # Create the environment.
     env = gym.make('LunarLander-v2')
-    
-    # TODO: Train cloned models using imitation learning, and record their
-    #       performance.
+    loss, acc = imit.train(env, num_episodes=50, num_epochs=100)
 
+    print "HW3-Q1.2: loss={}, accu={}".format(loss, acc)
+
+    # evaluation
+    num_epochs=50
+    rewards_Expert = []
+    rewards_model = []
+    # for _ in range(num_epochs):
+    #     _, _, rewards = imit.run_expert(env)
+    #     rewards_Expert.append(sum(rewards))
+    #     _, _, rewards = imit.run_model(env)
+    #     rewards_model.append(sum(rewards))
+
+    # mean_Expert = np.mean(rewards_Expert)
+    # stdE = np.std(rewards_Expert)
+    # mean_model = np.mean(rewards_model)
+    # stdM = np.std(rewards_model)
+
+    # print "Evaluation: \n >>> Expert: mean={}, std={}, mean/std={} \n >>> Model:  mean={}, std={}, mean/std={}".format(mean_Expert, stdE, mean_Expert/stdE, mean_model, stdM, mean_model/stdM)
+    for _ in range(10):
+        imit.run_model(env, True)
+    # # imitation
+    # init_state = env.reset()
+    # init_state = init_state.reshape(-1, init_state.size)
+    # state = init_state
+    # rewards = []
+    # actions = []
+    # states = []
+    # while True:
+    #     action = imit.expert.predict(state)
+    #     action2 = imit.model.predict(state)
+    #     print "crossEntropy", crossEntropy(action, action2[0]), action2[0]
+    #     act = np.argmax(action[0])
+    #     action = np.zeros(action.shape)
+    #     action[:, act] += 1
+    #     state, reward, isTerminal, debugInfo = env.step(act)
+    #     env.render()
+    #     print reward
+    #     if isTerminal:
+    #         break
+    #     state = state.reshape(1, state.size)
+    #     states.append(state)
+    #     actions.append(action)
+    #     rewards.append(reward)
+            
+    # state = init_state
+    # for i in 
+    
 
 if __name__ == '__main__':
-  main(sys.argv)
+    main(sys.argv)
